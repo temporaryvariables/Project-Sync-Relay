@@ -1,0 +1,15 @@
+{
+  "name": "rover-relay-starter",
+  "version": "1.0.0",
+  "description": "Student starter relay. Naive sequential PUTs to three ground stations. Works under perfect conditions, breaks under chaos.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
