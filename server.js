@@ -31,7 +31,7 @@ import cors from "cors";
 
 // The TCP port this server listens on. Read it from the environment if present
 // (your hosting platform sets PORT), otherwise default to 4000 for local dev.
-const PORT = process.env.PORT || 4001;
+const PORT = process.env.PORT || 4000;
 
 // Where the three ground stations live. You will send your PUT writes to URLs
 // built from this base, e.g. `${GROUND_STATION_URL}/groundstation/nasa/<selector>`.
