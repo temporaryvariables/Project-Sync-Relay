@@ -29,7 +29,7 @@ COPY . .
 # Document that the app listens on port 4001. EXPOSE is informational metadata —
 # it doesn't publish the port by itself; your platform maps it (and reads the
 # PORT env var, which the server honors).
-EXPOSE 4001
+EXPOSE 4000
 
 # The default command run when the container starts: launch the server with Node.
 # Using the exec form (JSON array) makes Node the main process so it receives
