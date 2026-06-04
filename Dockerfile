@@ -26,9 +26,10 @@ RUN npm install --omit=dev
 # separate, later layer so source edits don't bust the dependency cache above.
 COPY . .
 
-# Document that the app listens on port 4001. EXPOSE is informational metadata —
+# Document that the app listens on port 4000. EXPOSE is informational metadata —
 # it doesn't publish the port by itself; your platform maps it (and reads the
-# PORT env var, which the server honors).
+# PORT env var, which the server honors). Make sure Coolify's "Ports Exposes"
+# is set to 4000 to match, otherwise the proxy returns "Bad Gateway".
 EXPOSE 4000
 
 # The default command run when the container starts: launch the server with Node.

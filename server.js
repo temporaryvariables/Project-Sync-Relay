@@ -170,8 +170,10 @@ app.post("/replicate", async (req, res) => {
 });
 
 // Start listening for requests and print where we're pointed, to make local
-// debugging easier.
-app.listen(PORT, () => {
-  console.log(`rover-relay-starter listening on ${PORT}`);
+// debugging easier. Bind to 0.0.0.0 (all interfaces) so the container is
+// reachable from Coolify's reverse proxy — binding to localhost would make the
+// proxy fail with "Bad Gateway".
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`rover-relay-starter listening on 0.0.0.0:${PORT}`);
   console.log(`forwarding target (once you implement it): ${GROUND_STATION_URL}`);
 });
