@@ -1,3 +1,4 @@
+// Link: https://github.com/temporaryvariables/Project-Sync-Relay
 // rover-relay-starter
 // =============================================================================
 // This is your STARTING POINT — a deliberately empty scaffold.
@@ -152,7 +153,7 @@ app.post("/replicate", async (req, res) => {
     level: "info",
     step: "relay.received",
     selector,
-    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next.`,
+    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next. (Hello World!)`,
     properties: { payload, sequence_number },
   });
 
