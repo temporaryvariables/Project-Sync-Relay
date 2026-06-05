@@ -157,6 +157,23 @@ app.post("/replicate", async (req, res) => {
     properties: { payload, sequence_number },
   });
 
+  const station = "nasa";
+  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+
+  // Make the write. We `await` so we know the outcome before responding.
+  await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: auth,          // pass the caller's token through unchanged
+      "X-Correlation-Id": correlationId, // keep the whole command in one trace
+    },
+    body: JSON.stringify({
+      "payload": payload,
+      "sequence_number": sequence_number,
+    }),
+  });
+
   // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
   //   PUT `${GROUND_STATION_URL}/groundstation/<station>/${selector}`
   //   headers: Authorization: auth, X-Correlation-Id: correlationId
