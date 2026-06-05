@@ -153,7 +153,7 @@ app.post("/replicate", async (req, res) => {
     level: "info",
     step: "relay.received",
     selector,
-    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next. (Hello World!)`,
+    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next.`,
     properties: { payload, sequence_number },
   });
 
@@ -172,6 +172,18 @@ app.post("/replicate", async (req, res) => {
       "payload": payload,
       "sequence_number": sequence_number,
     }),
+  });
+
+    // The single example log line. This shows up in Mission Control's trace for
+  // this command as an "info" entry from "Relay", proving your logging works and
+  // giving you a template to copy. Add more missionLog(...) calls as you build
+  // out the forwarding (e.g. one per station result).
+  missionLog(auth, correlationId, {
+    level: "info",
+    step: "relay.received",
+    selector,
+    message: `DONE!`,
+    properties: { payload, sequence_number },
   });
 
   // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
