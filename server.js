@@ -120,6 +120,11 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 
+app.post("/helloworld", (req, res) => {
+  const { name } = req.body;
+  return res.json({ message: `Hello, ${name}!` });
+});
+
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
@@ -163,20 +168,6 @@ app.post("/replicate", async (req, res) => {
   //   body:    { payload, sequence_number }
   // Start simple (one station, then all three), then add retries, parallelism,
   // Retry-After handling, and sequence-number safeguards.
-
-  const station = "nasa";
-  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-  // Make the write. We `await` so we know the outcome before responding.
-  await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: auth,          // pass the caller's token through unchanged
-      "X-Correlation-Id": correlationId, // keep the whole command in one trace
-    },
-    body: JSON.stringify({ payload, sequence_number }),
-  });
 
   // Return an empty 200 response for now. Mission Control only needs a quick
   // acknowledgement; the real work is the station writes you'll add above.
