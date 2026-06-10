@@ -214,12 +214,12 @@ app.get("/ReturnHelloWorld", async (req, res) => {
 });
 
 //POST: /ReturnMyName/{my name goes here} -> { message: "Hello my name is {my name goes here}." }
-//app.post("/ReturnMyName/:name", async (req, res) => {
-//  const name = req.params.name;
-//   res.json({
-//     message: `Hello my name is ${name}.`
-//   });
-// })
+app.post("/ReturnMyName/:name", (req, res) => {
+  const name = req.body;
+  res.json({
+    message: `Hello my name is ${name}.`
+  });
+ })
 
-app.get("/ReturnMyName/:name", (_req, res) =>
-  { res.json({ status: `Hello my name is ${_req.params.name}.` })});
+//app.post("/ReturnMyName/:name", (_req, res) =>
+//  { res.json({ status: `Hello my name is ${_req.params.name}.` })});
