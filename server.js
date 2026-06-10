@@ -72,6 +72,10 @@ app.use(cors());
 // Parse incoming JSON request bodies into `req.body` automatically.
 app.use(express.json());
 
+app.get("/ReturnHelloWorld", (req, res) => {
+  res.json({ ok: true, message: "Hello World" });
+});
+
 // -----------------------------------------------------------------------------
 // missionLog(): send ONE line of your own story to Mission Control.
 //
