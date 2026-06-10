@@ -116,6 +116,8 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
   }).catch(() => { }); // ignore network/log errors entirely
 }
 
+
+app.get("/ReturnHelloWorld", (_req, res) => res.json({ message: "Hello World!" }));
 // A health check so your platform (and Mission Control) can confirm the relay is
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
