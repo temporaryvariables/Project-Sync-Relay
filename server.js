@@ -122,6 +122,11 @@ app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay
 
 app.get("/ReturnHelloWorld", (_req, res) => res.json({ message: "Hello World" }));
 
+app.get("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.name }));
+
+
+
+// /ReturnMyName/{my name goes here} -> { message: "Hello my name is {my name goes here}." }
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
