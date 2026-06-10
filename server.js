@@ -122,7 +122,7 @@ app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay
 app.get("/ReturnHelloWorld", (_req, res) => res.json({status: "ok", service: "rover-relay-starter", message: "Hello World"}));
 app.post("/ReturnMyName ", (req, res) => {
   const { name } = req.body || {};
-  res.json({status: "ok", service: "rover-relay-starter", message: `Hello ${name}!`});
+  res.json({status: "ok", service: "rover-relay-starter", message: `Hello my name is ${name}!`});
 });
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
