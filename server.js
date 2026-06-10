@@ -73,8 +73,13 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/ReturnHelloWorld", (req, res) => {
-  res.json({ ok: true, message: "Hello World" });
+  res.json({ message: "Hello World" });
 });
+
+app.post("/ReturnMyName/:name", (req, res) => {
+  const name = req.params.name;
+  res.json({ message: `Hello my name is ${name}.` })
+})
 
 // -----------------------------------------------------------------------------
 // missionLog(): send ONE line of your own story to Mission Control.
