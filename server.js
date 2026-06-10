@@ -118,8 +118,24 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 
 // A health check so your platform (and Mission Control) can confirm the relay is
 // up. Returns a tiny JSON object with HTTP 200.
+
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 
+app.get('/ReturnHelloWorld', (req, res) => {
+    res.json({
+        status: "ok",
+        service: "rover-relay-starter",
+        message: "Hello World"
+    });
+});
+
+app.post('/ReturnMyName/:name', (req, res) => {
+    res.json({
+        status: "ok",
+        service: "rover-relay-starter",
+        message: `Hello my name is ${req.params.name}.`
+    });
+});
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
@@ -202,6 +218,8 @@ app.post("/replicate", async (req, res) => {
 // debugging easier. Bind to 0.0.0.0 (all interfaces) so the container is
 // reachable from Coolify's reverse proxy — binding to localhost would make the
 // proxy fail with "Bad Gateway".
+
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`rover-relay-starter listening on 0.0.0.0:${PORT}`);
   console.log(`forwarding target (once you implement it): ${GROUND_STATION_URL}`);
