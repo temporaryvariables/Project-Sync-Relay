@@ -212,3 +212,10 @@ app.get("/ReturnHelloWorld", async (req, res) => {
     message: "Hello, World!"
   });
 });
+
+app.post("/ReturnMyName", (req, res) => {
+  const { name } = req.body;
+  return res.json({
+    message: `Hello, my name is ${name}!`
+  });
+});
