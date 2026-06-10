@@ -120,6 +120,17 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 
+// Hello world endpoint.
+app.get("/ReturnHelloWorld", (_req, res) => {
+  res.json({ ok: true, message: "Hello World" });
+});
+
+// Name greeting endpoint.
+app.post("/ReturnMyName/:name", (req, res) => {
+  const name = req.params.name;
+  res.json({ message: `Hello my name is ${name}.` });
+});
+
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
