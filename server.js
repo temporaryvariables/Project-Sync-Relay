@@ -121,20 +121,11 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 
-app.get('/ReturnHelloWorld', (req, res) => {
-    res.json({
-        status: "ok",
-        service: "rover-relay-starter",
-        message: "Hello World"
-    });
-});
+app.get("/ReturnHelloWorld", (_req, res) => res.json({status: "ok", service: "rover-relay-starter", message: "Hello World"}));
 
-app.post('/ReturnMyName/:name', (req, res) => {
-    res.json({
-        status: "ok",
-        service: "rover-relay-starter",
-        message: `Hello my name is ${req.params.name}.`
-    });
+app.post("/ReturnMyName/:Armaan", (req, res) => {
+  const { name = "Armaan" } = req.body || {};
+  res.json({status: "ok", service: "rover-relay-starter", message: `Hello my name is ${name}!`});
 });
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
