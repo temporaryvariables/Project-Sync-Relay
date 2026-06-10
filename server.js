@@ -206,3 +206,9 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`rover-relay-starter listening on 0.0.0.0:${PORT}`);
   console.log(`forwarding target (once you implement it): ${GROUND_STATION_URL}`);
 });
+
+app.get("/ReturnHelloWorld", async (req, res) => {
+  res.json({
+    message: "Hello, World!"
+  });
+});
