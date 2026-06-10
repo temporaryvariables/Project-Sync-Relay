@@ -120,7 +120,7 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 app.get("/ReturnHelloWorld", (_req, res) => res.json({status: "ok", service: "rover-relay-starter", message: "Hello World"}));
-app.post("/ReturnMyName/:name", (req, res) => {
+app.post("/ReturnMyName/:Ved", (req, res) => {
   const { name } = req.body || {};
   res.json({status: "ok", service: "rover-relay-starter", message: `Hello my name is ${name}!`});
 });   
