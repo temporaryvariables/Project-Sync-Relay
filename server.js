@@ -120,6 +120,14 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
 
+app.get("/ReturnHelloWorld", (_req, res) => {
+  res.json({ message: "Hello World" });
+});
+
+app.post("/ReturnMyName/:name", (req, res) => {
+  res.json({ message: `Hello my name is ${req.params.name}.` });
+});
+
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
@@ -157,34 +165,58 @@ app.post("/replicate", async (req, res) => {
     properties: { payload, sequence_number },
   });
 
-  const station = "nasa";
-  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+  const stationResults = await Promise.all(
+    STATIONS.map(async (station) => {
+      const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
 
-  // Make the write. We `await` so we know the outcome before responding.
-  await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: auth,          // pass the caller's token through unchanged
-      "X-Correlation-Id": correlationId, // keep the whole command in one trace
-    },
-    body: JSON.stringify({
-      "payload": payload,
-      "sequence_number": sequence_number,
-    }),
-  });
+      try {
+        const response = await fetch(url, {
+          method: "PUT",
+          headers: {
+            Authorization: auth,
+            "X-Correlation-Id": correlationId,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ payload, sequence_number }),
+        });
 
-    // The single example log line. This shows up in Mission Control's trace for
-  // this command as an "info" entry from "Relay", proving your logging works and
-  // giving you a template to copy. Add more missionLog(...) calls as you build
-  // out the forwarding (e.g. one per station result).
-  missionLog(auth, correlationId, {
-    level: "info",
-    step: "relay.received",
-    selector,
-    message: `DONE!`,
-    properties: { payload, sequence_number },
-  });
+        if (response.ok) {
+          missionLog(auth, correlationId, {
+            level: "success",
+            step: "relay.station.success",
+            selector,
+            station,
+            message: `${station} received ${selector}.`,
+            properties: { status: response.status, payload, sequence_number },
+          });
+
+          return { station, ok: true, status: response.status };
+        }
+
+        missionLog(auth, correlationId, {
+          level: "error",
+          step: "relay.station.failure",
+          selector,
+          station,
+          message: `${station} failed for ${selector}.`,
+          properties: { status: response.status, payload, sequence_number },
+        });
+
+        return { station, ok: false, status: response.status };
+      } catch (error) {
+        missionLog(auth, correlationId, {
+          level: "error",
+          step: "relay.station.failure",
+          selector,
+          station,
+          message: `${station} failed for ${selector}.`,
+          properties: { error: error.message, payload, sequence_number },
+        });
+
+        return { station, ok: false, error: error.message };
+      }
+    })
+  );
 
   // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
   //   PUT `${GROUND_STATION_URL}/groundstation/<station>/${selector}`
@@ -193,9 +225,8 @@ app.post("/replicate", async (req, res) => {
   // Start simple (one station, then all three), then add retries, parallelism,
   // Retry-After handling, and sequence-number safeguards.
 
-  // Return an empty 200 response for now. Mission Control only needs a quick
-  // acknowledgement; the real work is the station writes you'll add above.
-  res.status(200).end();
+  const allStationsSucceeded = stationResults.every((result) => result.ok);
+  res.status(allStationsSucceeded ? 200 : 502).json({ stations: stationResults });
 });
 
 // Start listening for requests and print where we're pointed, to make local
