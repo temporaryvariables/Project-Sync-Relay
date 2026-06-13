@@ -174,7 +174,7 @@ app.post("/replicate", async (req, res) => {
       level: "loop info",
       step: "relay.received",
       selector,
-      message: `${station} received ${selector} seq ${sequence_number} ("${payload}")`,
+      message: `${station} received ${sequence_number} expected ${currentSequenceNumber[station]}`,
       properties: { station, selector, payload, sequence_number},
     });
 
