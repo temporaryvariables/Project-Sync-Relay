@@ -122,16 +122,14 @@ app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay
 app.get("/helloWorld", (_req, res) => res.json({ status: "Hello World" }));
 app.post("/ReturnMyName/:name", (_req, res) => res.json({ status: `Hello my name is ${_req.params.name}` }));
 
-// -----------------------------------------------------------------------------
-// POST /replicate — the heart of your relay (currently a stub).
-//
-// Mission Control calls this once per command. The body looks like:
-//   { "selector": "cmd-4821", "payload": "fire_thruster", "sequence_number": 12 }
-//
-// This scaffold does NOT validate the body and does NOT forward to the stations.
-// It just reads the trace context, emits one example log, and returns an empty
-// response. Replace the TODO below with your real forwarding logic.
-// -----------------------------------------------------------------------------
+
+//The current expected received sequence number for each station
+const currentSequenceNumber = {
+  nasa: 0,
+  esa: 0,
+  jaxa: 0,
+};
+
 app.post("/replicate", async (req, res) => {
   // Pull the command fields out of the JSON body. (No validation on purpose —
   // add your own checks here later if you want.)
@@ -146,13 +144,6 @@ app.post("/replicate", async (req, res) => {
   // the dashboard can render a single end-to-end trace. Read it here and forward
   // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
-
-  //The current expected received sequence number for each station
-  const currentSequenceNumber = {
-    nasa: 0,
-    esa: 0,
-    jaxa: 0,
-  };
 
   // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
