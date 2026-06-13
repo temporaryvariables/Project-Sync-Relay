@@ -122,11 +122,13 @@ app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay
 
 app.get("/ReturnHelloWorld", (_req, res) => res.json({ message: "Hello World" }));
 
-app.get("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.name }));
+app.post("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.name }));
 
-
-
+// POST: some sort of operation
 // /ReturnMyName/{my name goes here} -> { message: "Hello my name is {my name goes here}." }
+
+
+
 // -----------------------------------------------------------------------------
 // POST /replicate — the heart of your relay (currently a stub).
 //
@@ -166,23 +168,19 @@ app.post("/replicate", async (req, res) => {
 
   const stations = ["nasa", "esa", "jaxa"];
   
-  for(const station of stations) {
-    const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-    // Make the write. We `await` so we know the outcome before responding.
-    await fetch(url, {
+  const requests = stations.map(station => 
+    fetch(`${GROUND_STATION_URL}/groundstation/${station}/${selector}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
-        Authorization: auth,          // pass the caller's token through unchanged
-        "X-Correlation-Id": correlationId, // keep the whole command in one trace
+        Authorization: auth,
+        "X-Correlation-Id": correlationId,
       },
-      body: JSON.stringify({
-        "payload": payload,
-        "sequence_number": sequence_number,
-      }),
-    });
-  }
+      body: JSON.stringify({ payload, sequence_number }),
+    })
+  );
+
+  const results = await Promise.all(requests);
     // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
   // giving you a template to copy. Add more missionLog(...) calls as you build
