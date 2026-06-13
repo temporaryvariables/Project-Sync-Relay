@@ -147,11 +147,11 @@ app.post("/replicate", async (req, res) => {
   // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
 
-  //The last received sequence number for each station
-  const lastSequenceNumber = {
-    nasa: 0,
-    esa: 0,
-    jaxa: 0,
+  //The current expected received sequence number for each station
+  const currentSequenceNumber = {
+    nasa: 1,
+    esa: 1,
+    jaxa: 1,
   };
 
   // The single example log line. This shows up in Mission Control's trace for
@@ -168,17 +168,26 @@ app.post("/replicate", async (req, res) => {
 
   //loop through all stations in the array of stations
   for (const station of STATIONS) {
-    const lastSequence = lastSequenceNumber[station];
+    const expectedSequence = currentSequenceNumber[station];
 
-    //skip this request if we've already received a newer sequence number
-    if (lastSequence >= sequence_number) {
+    if (sequence_number !== expectedSequence) {
+      console.log(
+        `[${station}] rejected seq ${sequence_number}, expected ${expectedSequence}`
+      );
+      missionLog(auth, correlationId, {
+        level: "LOG",
+        step: "relay.received",
+        selector,
+        message: `${station}] rejected seq ${sequence_number}, expected ${expectedSequence}`,
+        properties: { station, sequence_number, expectedSequence },
+      });
       continue;
     }
 
     const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
 
     // Make the write. We `await` so we know the outcome before responding.
-    await fetch(url, {
+    const result = await fetch(url, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -191,8 +200,10 @@ app.post("/replicate", async (req, res) => {
       }),
     });
 
-    //update the last received sequence number for this station
-    lastSequenceNumber[station] = sequence_number;
+    // Only advance if the request actually succeeded
+    if (result.ok) {
+      nextExpectedSequence[station]++;
+    }
   }
   
     // The single example log line. This shows up in Mission Control's trace for
