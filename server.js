@@ -130,6 +130,18 @@ const currentSequenceNumber = {
   jaxa: 0,
 };
 
+// temp endpoint to reset sequence numbers using postman
+app.post("/reset", (_req, res) => {
+  currentSequenceNumber.nasa = 0;
+  currentSequenceNumber.esa = 0;
+  currentSequenceNumber.jaxa = 0;
+
+  res.status(200).json({
+    message: "Sequence numbers reset.",
+    currentSequenceNumber,
+  });
+});
+
 app.post("/replicate", async (req, res) => {
   // Pull the command fields out of the JSON body. (No validation on purpose —
   // add your own checks here later if you want.)
@@ -166,7 +178,7 @@ app.post("/replicate", async (req, res) => {
       step: "relay.received",
       selector,
       message: `${station} received ${sequence_number} expected ${currentSequenceNumber[station]}`,
-      properties: { station, selector, payload, sequence_number, correlationId },
+      properties: { station, selector, payload, sequence_number },
     });
 
     if (sequence_number <= currentSequenceNumber[station]) {
