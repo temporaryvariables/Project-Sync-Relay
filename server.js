@@ -168,23 +168,18 @@ app.post("/replicate", async (req, res) => {
 
   //loop through all stations in the array of stations
   for (const station of STATIONS) {
-    const expectedSequence = currentSequenceNumber[station];
-
-    if (sequence_number <= expectedSequence) {
-      missionLog(auth, correlationId, {
-        level: "LOG",
-        step: "relay.received",
-        selector,
-        message: `${station}] rejected seq ${sequence_number}, expected ${expectedSequence}`,
-        properties: { station, sequence_number, expectedSequence },
-      });
-      continue;
-    }
-
     const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
 
+    missionLog(auth, correlationId, {
+      level: "loop info",
+      step: "relay.received",
+      selector,
+      message: `${station} received ${selector} seq ${sequence_number} ("${payload}")`,
+      properties: { station, selector, payload, sequence_number},
+    });
+
     // Make the write. We `await` so we know the outcome before responding.
-    const result = await fetch(url, {
+    await fetch(url, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -196,11 +191,6 @@ app.post("/replicate", async (req, res) => {
         "sequence_number": sequence_number,
       }),
     });
-
-    // Only advance if the request actually succeeded
-    if (result.ok) {
-      nextExpectedSequence[station]=sequence_number;
-    }
   }
   
     // The single example log line. This shows up in Mission Control's trace for
