@@ -166,7 +166,7 @@ app.post("/replicate", async (req, res) => {
       step: "relay.received",
       selector,
       message: `${station} received ${sequence_number} expected ${currentSequenceNumber[station]}`,
-      properties: { station, selector, payload, sequence_number},
+      properties: { station, selector, payload, sequence_number, correlationId },
     });
 
     if (sequence_number <= currentSequenceNumber[station]) {
