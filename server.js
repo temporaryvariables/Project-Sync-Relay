@@ -178,6 +178,17 @@ app.post("/replicate", async (req, res) => {
       properties: { station, selector, payload, sequence_number},
     });
 
+    if (sequence_number <= currentSequenceNumber[station]) {
+      missionLog(auth, correlationId, {
+        level: "error",
+        step: "relay.received",
+        selector,
+        message: `${station} rejected seq ${sequence_number}, expected ${currentSequenceNumber[station]}`,
+        properties: { station, sequence_number, expectedSequence: currentSequenceNumber[station] },
+      });
+      continue;
+    }
+
     // Make the write. We `await` so we know the outcome before responding.
     await fetch(url, {
       method: "PUT",
@@ -191,6 +202,8 @@ app.post("/replicate", async (req, res) => {
         "sequence_number": sequence_number,
       }),
     });
+
+    currentSequenceNumber[station] = sequence_number;
   }
   
     // The single example log line. This shows up in Mission Control's trace for
