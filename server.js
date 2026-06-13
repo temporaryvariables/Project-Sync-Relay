@@ -147,6 +147,13 @@ app.post("/replicate", async (req, res) => {
   // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
 
+  //The last received sequence number for each station
+  const lastSequenceNumber = {
+    nasa: 0,
+    esa: 0,
+    jaxa: 0,
+  };
+
   // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
   // giving you a template to copy. Add more missionLog(...) calls as you build
@@ -161,6 +168,13 @@ app.post("/replicate", async (req, res) => {
 
   //loop through all stations in the array of stations
   for (const station of STATIONS) {
+    const lastSequence = lastSequenceNumber[station];
+
+    //skip this request if we've already received a newer sequence number
+    if (lastSequence >= sequence_number) {
+      continue;
+    }
+
     const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
 
     // Make the write. We `await` so we know the outcome before responding.
@@ -176,6 +190,9 @@ app.post("/replicate", async (req, res) => {
         "sequence_number": sequence_number,
       }),
     });
+
+    //update the last received sequence number for this station
+    lastSequenceNumber[station] = sequence_number;
   }
   
     // The single example log line. This shows up in Mission Control's trace for
