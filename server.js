@@ -149,9 +149,9 @@ app.post("/replicate", async (req, res) => {
 
   //The current expected received sequence number for each station
   const currentSequenceNumber = {
-    nasa: 1,
-    esa: 1,
-    jaxa: 1,
+    nasa: 0,
+    esa: 0,
+    jaxa: 0,
   };
 
   // The single example log line. This shows up in Mission Control's trace for
@@ -170,10 +170,7 @@ app.post("/replicate", async (req, res) => {
   for (const station of STATIONS) {
     const expectedSequence = currentSequenceNumber[station];
 
-    if (sequence_number !== expectedSequence) {
-      console.log(
-        `[${station}] rejected seq ${sequence_number}, expected ${expectedSequence}`
-      );
+    if (sequence_number > expectedSequence) {
       missionLog(auth, correlationId, {
         level: "LOG",
         step: "relay.received",
@@ -202,7 +199,7 @@ app.post("/replicate", async (req, res) => {
 
     // Only advance if the request actually succeeded
     if (result.ok) {
-      nextExpectedSequence[station]++;
+      nextExpectedSequence[station]=sequence_number;
     }
   }
   
