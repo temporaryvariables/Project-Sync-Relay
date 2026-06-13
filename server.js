@@ -170,7 +170,7 @@ app.post("/replicate", async (req, res) => {
   for (const station of STATIONS) {
     const expectedSequence = currentSequenceNumber[station];
 
-    if (sequence_number > expectedSequence) {
+    if (sequence_number <= expectedSequence) {
       missionLog(auth, correlationId, {
         level: "LOG",
         step: "relay.received",
