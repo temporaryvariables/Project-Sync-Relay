@@ -65,6 +65,10 @@ function normalizeUrl(value, fallback) {
   return /^https?:\/\//i.test(v) ? v : `https://${v}`;
 }
 
+function buildStationUrl(station, selector) {
+  return `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+}
+
 // Create the Express application instance.
 const app = express();
 // Enable CORS for every route so cross-origin callers (Mission Control) are allowed.
@@ -124,82 +128,266 @@ app.post("/ReturnMyName/:name", (req, res) => {
   const name = req.params.name || "";
   res.json({ status: "ok", service: "rover-relay-starter", message: `Hello, my name is ${name}!` });
 });
-// -----------------------------------------------------------------------------
-// POST /replicate — the heart of your relay (currently a stub).
-//
-// Mission Control calls this once per command. The body looks like:
-//   { "selector": "cmd-4821", "payload": "fire_thruster", "sequence_number": 12 }
-//
-// This scaffold does NOT validate the body and does NOT forward to the stations.
-// It just reads the trace context, emits one example log, and returns an empty
-// response. Replace the TODO below with your real forwarding logic.
-// -----------------------------------------------------------------------------
-app.post("/replicate", async (req, res) => {
-  // Pull the command fields out of the JSON body. (No validation on purpose —
-  // add your own checks here later if you want.)
+
+const MAX_STATION_ATTEMPTS = 5;
+const INITIAL_BACKOFF_MS = 300;
+const MAX_BACKOFF_MS = 5000;
+const QUEUE_RETRY_DELAY_MS = 1000;
+const commandQueue = [];
+let isProcessingQueue = false;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfter(header) {
+  if (!header) return null;
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (!Number.isNaN(seconds)) {
+    return Math.max(seconds * 1000, 0);
+  }
+  const parsed = Date.parse(trimmed);
+  return Number.isNaN(parsed) ? null : Math.max(parsed - Date.now(), 0);
+}
+
+function isServerError(status) {
+  return status >= 500 && status < 600;
+}
+
+async function writeToStation({ station, selector, payload, sequence_number, auth, correlationId }) {
+  const url = buildStationUrl(station, selector);
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: auth,
+    "X-Correlation-Id": correlationId,
+  };
+  const body = JSON.stringify({ payload, sequence_number });
+
+  for (let attempt = 1; attempt <= MAX_STATION_ATTEMPTS; attempt += 1) {
+    missionLog(auth, correlationId, {
+      level: "info",
+      step: "relay.station.write",
+      selector,
+      station,
+      message: `Sending ${selector} to ${station.toUpperCase()} (attempt ${attempt}).`,
+      properties: { attempt, sequence_number },
+    });
+
+    let response;
+    try {
+      response = await fetch(url, { method: "PUT", headers, body });
+    } catch (error) {
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.station.network",
+        selector,
+        station,
+        message: `${station.toUpperCase()} network error on attempt ${attempt}.`,
+        properties: { error: error?.message || "unknown" },
+      });
+      if (attempt === MAX_STATION_ATTEMPTS) {
+        const err = new Error(`station_network_failure:${station}`);
+        err.code = "STATION_FAILURE";
+        throw err;
+      }
+      await delay(Math.min(INITIAL_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS));
+      continue;
+    }
+
+    if (response.ok) {
+      missionLog(auth, correlationId, {
+        level: "success",
+        step: "relay.station.success",
+        selector,
+        station,
+        message: `${station.toUpperCase()} accepted ${selector} on attempt ${attempt}.`,
+        properties: { status: response.status },
+      });
+      return;
+    }
+
+    const responseText = await response.text().catch(() => "<unreadable>");
+
+    if (response.status === 409) {
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.station.conflict",
+        selector,
+        station,
+        message: `${station.toUpperCase()} rejected ${selector} because sequence ${sequence_number} is stale.`,
+        properties: { status: response.status, body: responseText },
+      });
+      const err = new Error(`stale_sequence:${station}`);
+      err.code = "STALE_SEQUENCE";
+      throw err;
+    }
+
+    if (response.status === 429) {
+      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after")) ?? Math.min(INITIAL_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.station.throttled",
+        selector,
+        station,
+        message: `${station.toUpperCase()} throttled ${selector}, retrying in ${retryAfterMs}ms.`,
+        properties: { status: response.status, retryAfterMs, body: responseText },
+      });
+      await delay(retryAfterMs);
+      continue;
+    }
+
+    if (isServerError(response.status)) {
+      const backoff = Math.min(INITIAL_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.station.retry",
+        selector,
+        station,
+        message: `${station.toUpperCase()} returned ${response.status}. Retrying in ${backoff}ms.`,
+        properties: { status: response.status, body: responseText },
+      });
+      await delay(backoff);
+      continue;
+    }
+
+    missionLog(auth, correlationId, {
+      level: "error",
+      step: "relay.station.failed",
+      selector,
+      station,
+      message: `${station.toUpperCase()} rejected ${selector} with status ${response.status}.`,
+      properties: { status: response.status, body: responseText },
+    });
+    const err = new Error(`station_failed:${station}:${response.status}`);
+    err.code = "STATION_FAILURE";
+    throw err;
+  }
+
+  const err = new Error(`max_retries_exceeded:${station}`);
+  err.code = "MAX_RETRIES_EXCEEDED";
+  missionLog(auth, correlationId, {
+    level: "error",
+    step: "relay.station.failed",
+    selector,
+    station,
+    message: `${station.toUpperCase()} did not succeed after ${MAX_STATION_ATTEMPTS} attempts.`,
+    properties: {},
+  });
+  throw err;
+}
+
+async function replicateCommand({ selector, payload, sequence_number, auth, correlationId }) {
+  missionLog(auth, correlationId, {
+    level: "info",
+    step: "relay.replicate.start",
+    selector,
+    message: `Beginning replication for ${selector}.`,
+    properties: { payload, sequence_number },
+  });
+
+  const stationWrites = STATIONS.map((station) =>
+    writeToStation({ station, selector, payload, sequence_number, auth, correlationId })
+  );
+
+  const results = await Promise.allSettled(stationWrites);
+  const rejected = results.filter((item) => item.status === "rejected");
+  const stale = rejected.find((item) => item.reason?.code === "STALE_SEQUENCE");
+
+  if (stale) {
+    missionLog(auth, correlationId, {
+      level: "warn",
+      step: "relay.replicate.stale",
+      selector,
+      message: `Command ${selector} is stale and will not be retried.`,
+      properties: { station: stale.reason?.message },
+    });
+    throw stale.reason;
+  }
+
+  if (rejected.length > 0) {
+    const errors = rejected.map((item) => item.reason?.message || "unknown");
+    missionLog(auth, correlationId, {
+      level: "error",
+      step: "relay.replicate.failed",
+      selector,
+      message: `Replication failed for ${rejected.length}/${STATIONS.length} stations.`,
+      properties: { errors },
+    });
+    throw rejected[0].reason;
+  }
+
+  missionLog(auth, correlationId, {
+    level: "success",
+    step: "relay.replicate.completed",
+    selector,
+    message: `Replication completed for ${selector}.`,
+    properties: { payload, sequence_number },
+  });
+}
+
+async function processQueue() {
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
+
+  while (commandQueue.length > 0) {
+    const command = commandQueue[0];
+    try {
+      await replicateCommand(command);
+      commandQueue.shift();
+    } catch (error) {
+      if (error?.code === "STALE_SEQUENCE") {
+        commandQueue.shift();
+        continue;
+      }
+      missionLog(command.auth, command.correlationId, {
+        level: "warn",
+        step: "relay.queue.retry",
+        selector: command.selector,
+        message: `Retrying ${command.selector} after transient failure.`,
+        properties: { error: error?.message || "unknown" },
+      });
+      await delay(QUEUE_RETRY_DELAY_MS);
+    }
+  }
+
+  isProcessingQueue = false;
+}
+
+function enqueueCommand(command) {
+  commandQueue.push(command);
+  processQueue().catch((err) => {
+    console.error("Queue processing error", err);
+  });
+}
+
+app.post("/replicate", (req, res) => {
   const { selector, payload, sequence_number } = req.body || {};
-
-  // Mission Control forwards the caller's PocketBase token in the Authorization
-  // header. You must pass this straight through on every call you make to the
-  // ground stations so they can identify your team.
   const auth = req.headers.authorization || "";
-
-  // The X-Correlation-Id header ties every hop of this one command together so
-  // the dashboard can render a single end-to-end trace. Read it here and forward
-  // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
 
-  // The single example log line. This shows up in Mission Control's trace for
-  // this command as an "info" entry from "Relay", proving your logging works and
-  // giving you a template to copy. Add more missionLog(...) calls as you build
-  // out the forwarding (e.g. one per station result).
+  if (!selector || typeof selector !== "string") {
+    return res.status(400).json({ error: "invalid_request", message: "selector is required and must be a string." });
+  }
+
+  if (typeof sequence_number !== "number" || !Number.isInteger(sequence_number) || sequence_number < 0) {
+    return res.status(400).json({ error: "invalid_request", message: "sequence_number is required and must be a non-negative integer." });
+  }
+
+  if (payload === undefined) {
+    return res.status(400).json({ error: "invalid_request", message: "payload is required." });
+  }
+
+  enqueueCommand({ selector, payload, sequence_number, auth, correlationId });
   missionLog(auth, correlationId, {
     level: "info",
-    step: "relay.received",
+    step: "relay.enqueued",
     selector,
-    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next.`,
+    message: `Queued ${selector} for replication to all stations.`,
     properties: { payload, sequence_number },
   });
 
-  const station = "nasa";
-  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-  // Make the write. We `await` so we know the outcome before responding.
-  await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: auth,          // pass the caller's token through unchanged
-      "X-Correlation-Id": correlationId, // keep the whole command in one trace
-    },
-    body: JSON.stringify({
-      "payload": payload,
-      "sequence_number": sequence_number,
-    }),
-  });
-
-    // The single example log line. This shows up in Mission Control's trace for
-  // this command as an "info" entry from "Relay", proving your logging works and
-  // giving you a template to copy. Add more missionLog(...) calls as you build
-  // out the forwarding (e.g. one per station result).
-  missionLog(auth, correlationId, {
-    level: "info",
-    step: "relay.received",
-    selector,
-    message: `DONE!`,
-    properties: { payload, sequence_number },
-  });
-
-  // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
-  //   PUT `${GROUND_STATION_URL}/groundstation/<station>/${selector}`
-  //   headers: Authorization: auth, X-Correlation-Id: correlationId
-  //   body:    { payload, sequence_number }
-  // Start simple (one station, then all three), then add retries, parallelism,
-  // Retry-After handling, and sequence-number safeguards.
-
-  // Return an empty 200 response for now. Mission Control only needs a quick
-  // acknowledgement; the real work is the station writes you'll add above.
-  res.status(200).end();
+  return res.status(200).end();
 });
 
 // Start listening for requests and print where we're pointed, to make local
