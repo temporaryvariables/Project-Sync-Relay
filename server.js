@@ -158,22 +158,30 @@ app.post("/replicate", async (req, res) => {
     properties: { payload, sequence_number },
   });
 
-  const station = "nasa";
-  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
 
-  // Make the write. We `await` so we know the outcome before responding.
+  
+
+  const stations = ["nasa", "esa", "jaxa"];
+
+for (let i = 0; i < stations.length; i++) {
+  const station = stations[i];
+
+  const url =
+    `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+
   await fetch(url, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
-      Authorization: auth,          // pass the caller's token through unchanged
-      "X-Correlation-Id": correlationId, // keep the whole command in one trace
+      Authorization: auth,
+      "X-Correlation-Id": correlationId,
     },
     body: JSON.stringify({
-      "payload": payload,
-      "sequence_number": sequence_number,
+      payload,
+      sequence_number,
     }),
   });
+}
 
     // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
