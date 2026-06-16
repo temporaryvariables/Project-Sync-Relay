@@ -8,186 +8,244 @@
 // stations (NASA, ESA, JAXA) so they all end up holding the same value, in the
 // right order, even when deep space gets noisy (blackouts, throttling, latency,
 // out-of-order delivery).
-//
-// Right now this scaffold does almost nothing: it accepts the request, writes a
-// single example log line, and returns an empty response. It does NOT talk to
-// the stations yet — that part is up to you.
-//
-// Your mission: implement the forwarding inside POST /replicate. Suggested order
-// of difficulty as you make it resilient:
-//   1. Write to all three stations (start sequential, then go parallel).
-//   2. Retry with exponential backoff when a station returns HTTP 500.
-//   3. Respect HTTP 429 + Retry-After when a station is throttling.
-//   4. Keep sequence numbers monotonic so stale writes (HTTP 409) don't win.
-//   5. Add a queue / persistence so nothing is lost mid-flight.
 // =============================================================================
 
-// `express` is the HTTP framework that turns this file into a web server.
 import express from "express";
-// `cors` lets browsers and other origins call this service without being blocked
-// by the browser's same-origin policy. Mission Control runs on a different host,
-// so we enable it.
 import cors from "cors";
 
-// The TCP port this server listens on. Read it from the environment if present
-// (your hosting platform sets PORT), otherwise default to 4000 for local dev.
 const PORT = process.env.PORT || 4000;
-
-// Where the three ground stations live. You will send your PUT writes to URLs
-// built from this base, e.g. `${GROUND_STATION_URL}/groundstation/nasa/<selector>`.
-// `normalizeUrl` (defined below) tolerates a bare host or a full http(s) URL.
 const GROUND_STATION_URL = normalizeUrl(process.env.GROUND_STATION_URL, "http://localhost:3001");
-
-// Where to send your own log lines so they appear in Mission Control's trace,
-// interleaved with the platform's logs for the same command. Point this at the
-// same Flight Director URL Mission Control uses. Set RELAY_LOGGING=false to mute.
 const FLIGHT_DIRECTOR_URL = normalizeUrl(process.env.FLIGHT_DIRECTOR_URL, "http://localhost:3002");
-
-// A simple on/off switch for your logging. Logging is on unless you explicitly
-// set RELAY_LOGGING=false. (`!== "false"` means "anything other than the string
-// 'false' counts as enabled".)
 const RELAY_LOGGING = process.env.RELAY_LOGGING !== "false";
-
-// The three stations you must keep in sync. You'll loop over these when you
-// implement forwarding. Left here as a hint — nothing reads it yet.
 const STATIONS = ["nasa", "esa", "jaxa"];
 
-// Accept a service URL with or without a scheme. A bare host like
-// "stations.example.com" becomes "https://stations.example.com", while an
-// explicit "http://ground-station-api:3001" is left untouched. This keeps the
-// env vars forgiving whether you paste a domain or a full URL.
+// Tracks the last successfully forwarded sequence_number per selector.
+// Used to detect and reject stale/duplicate writes before hitting the stations.
+const lastSequence = new Map();
+
 function normalizeUrl(value, fallback) {
-  // Use the provided value, fall back to the default, and trim stray whitespace.
   const v = (value || fallback || "").trim();
-  // If it's empty, return it as-is (nothing to normalize).
   if (!v) return v;
-  // If it already starts with http:// or https://, keep it; otherwise assume https.
   return /^https?:\/\//i.test(v) ? v : `https://${v}`;
 }
 
-// Create the Express application instance.
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const app = express();
-// Enable CORS for every route so cross-origin callers (Mission Control) are allowed.
 app.use(cors());
-// Parse incoming JSON request bodies into `req.body` automatically.
 app.use(express.json());
 
-// -----------------------------------------------------------------------------
-// missionLog(): send ONE line of your own story to Mission Control.
-//
-// What it does: makes a fire-and-forget POST to the Flight Director's /logs
-// endpoint. "Fire and forget" means we never `await` it and we swallow any
-// error (`.catch(() => {})`), so logging can never slow down or break a
-// replication. If logging is disabled, or we're missing the auth token /
-// correlation id / Flight Director URL, it simply does nothing.
-//
-// Why a correlation id: every command carries an X-Correlation-Id. Sending it
-// with your log lets Mission Control stitch your message into the same end-to-end
-// trace as the platform's own log lines for that command.
-//
-// Fields you can pass:
-//   level      "info" | "success" | "warn" | "error"  (controls the color/badge)
-//   step       a short machine name for this moment, e.g. "relay.received"
-//   selector   which command this is about
-//   station    optional station name if the line is about one station
-//   message    the human-readable sentence shown in the dashboard
-//   properties any extra key/values to attach (shown as chips in the trace)
-// -----------------------------------------------------------------------------
 function missionLog(token, correlationId, { level = "info", step, selector, station, message, properties = {} }) {
-  // Bail out unless logging is on and we have everything we need.
   if (!RELAY_LOGGING || !token || !correlationId || !FLIGHT_DIRECTOR_URL) return;
-  // The Flight Director expects a Bearer token; add the prefix if it's missing.
   const auth = token.startsWith("Bearer ") ? token : `Bearer ${token}`;
-  // POST the log event. We do not await this promise — it runs in the background.
   fetch(`${FLIGHT_DIRECTOR_URL}/logs`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: auth },
     body: JSON.stringify({
-      ts: new Date().toISOString(), // when this happened, for correct ordering
-      service: "rover-relay",        // who emitted it (labeled "Relay" in the UI)
-      level,                          // info/success/warn/error
-      step: step || "relay.note",    // a short machine name for this step
-      selector,                       // which command
-      station,                        // optional station this line is about
-      message,                        // the human-readable sentence
-      correlation_id: correlationId,  // ties this line into the command's trace
-      meta: properties,               // any extra structured detail
+      ts: new Date().toISOString(),
+      service: "rover-relay",
+      level,
+      step: step || "relay.note",
+      selector,
+      station,
+      message,
+      correlation_id: correlationId,
+      meta: properties,
     }),
-  }).catch(() => { }); // ignore network/log errors entirely
+  }).catch(() => {});
 }
 
-// A health check so your platform (and Mission Control) can confirm the relay is
-// up. Returns a tiny JSON object with HTTP 200.
-app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
+// Write to one station with retries for 500 (blackout) and 429 (throttle).
+async function writeToStation(station, selector, payload, sequence_number, auth, correlationId) {
+  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+  const MAX_RETRIES = 8;
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: auth,
+          "X-Correlation-Id": correlationId,
+        },
+        body: JSON.stringify({ payload, sequence_number }),
+      });
+    } catch (err) {
+      // Network error — treat like a 500 and retry with backoff
+      const backoff = Math.min(500 * Math.pow(2, attempt), 30000);
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.network-error",
+        selector,
+        station,
+        message: `Network error writing to ${station}, retrying in ${backoff}ms (attempt ${attempt + 1})`,
+        properties: { error: String(err) },
+      });
+      await sleep(backoff);
+      continue;
+    }
+
+    if (res.ok) {
+      missionLog(auth, correlationId, {
+        level: "success",
+        step: "relay.written",
+        selector,
+        station,
+        message: `Successfully wrote "${payload}" to ${station}`,
+        properties: { sequence_number },
+      });
+      return { station, success: true };
+    }
+
+    if (res.status === 429) {
+      const data = await res.json().catch(() => ({}));
+      const retryAfter = data.retry_after_ms || 1000;
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.throttled",
+        selector,
+        station,
+        message: `${station} is throttling — waiting ${retryAfter}ms before retry`,
+        properties: { retry_after_ms: retryAfter, attempt },
+      });
+      await sleep(retryAfter);
+      continue;
+    }
+
+    if (res.status === 500) {
+      const backoff = Math.min(500 * Math.pow(2, attempt), 30000);
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.blackout",
+        selector,
+        station,
+        message: `${station} blacked out (500) — retrying in ${backoff}ms (attempt ${attempt + 1})`,
+        properties: { backoff_ms: backoff, attempt },
+      });
+      await sleep(backoff);
+      continue;
+    }
+
+    if (res.status === 409) {
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.stale-sequence",
+        selector,
+        station,
+        message: `${station} rejected write — stale sequence_number ${sequence_number} (409)`,
+        properties: { sequence_number },
+      });
+      return { station, success: false, status: 409 };
+    }
+
+    // 401, 403, 404 — don't retry
+    missionLog(auth, correlationId, {
+      level: "error",
+      step: "relay.write-failed",
+      selector,
+      station,
+      message: `${station} returned ${res.status} — not retrying`,
+      properties: { status: res.status },
+    });
+    return { station, success: false, status: res.status };
+  }
+
+  missionLog(auth, correlationId, {
+    level: "error",
+    step: "relay.max-retries",
+    selector,
+    station,
+    message: `Gave up writing to ${station} after ${MAX_RETRIES} attempts`,
+    properties: { sequence_number },
+  });
+  return { station, success: false, error: "max retries exceeded" };
+}
 
 // -----------------------------------------------------------------------------
-// POST /replicate — the heart of your relay (currently a stub).
-//
-// Mission Control calls this once per command. The body looks like:
-//   { "selector": "cmd-4821", "payload": "fire_thruster", "sequence_number": 12 }
-//
-// This scaffold does NOT validate the body and does NOT forward to the stations.
-// It just reads the trace context, emits one example log, and returns an empty
-// response. Replace the TODO below with your real forwarding logic.
+// Practice endpoints from the meeting demo
+// -----------------------------------------------------------------------------
+
+app.get("/ReturnHelloWorld", (_req, res) => {
+  res.json({ message: "Hello World" });
+});
+
+app.post("/ReturnMyName/:name", (req, res) => {
+  const { name } = req.params;
+  res.json({ message: `Hello my name is ${name}.` });
+});
+
+// Health check — confirms the relay is up and running.
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", service: "rover-relay", team: "dea", message: "Dea's relay is online and ready!" });
+});
+
+// -----------------------------------------------------------------------------
+// POST /replicate — fan out to all three stations in parallel with retries.
 // -----------------------------------------------------------------------------
 app.post("/replicate", async (req, res) => {
-  // Pull the command fields out of the JSON body. (No validation on purpose —
-  // add your own checks here later if you want.)
   const { selector, payload, sequence_number } = req.body || {};
-
-  // Mission Control forwards the caller's PocketBase token in the Authorization
-  // header. You must pass this straight through on every call you make to the
-  // ground stations so they can identify your team.
   const auth = req.headers.authorization || "";
-
-  // The X-Correlation-Id header ties every hop of this one command together so
-  // the dashboard can render a single end-to-end trace. Read it here and forward
-  // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
 
-  // The single example log line. This shows up in Mission Control's trace for
-  // this command as an "info" entry from "Relay", proving your logging works and
-  // giving you a template to copy. Add more missionLog(...) calls as you build
-  // out the forwarding (e.g. one per station result).
+  // Sequence number validation: reject commands that are older than what we
+  // already forwarded for this selector, to prevent stale writes winning.
+  if (selector && sequence_number != null) {
+    const last = lastSequence.get(selector);
+    if (last != null && sequence_number <= last) {
+      missionLog(auth, correlationId, {
+        level: "warn",
+        step: "relay.seq-rejected",
+        selector,
+        message: `Dropping stale command: sequence_number ${sequence_number} <= last seen ${last}`,
+        properties: { sequence_number, last_sequence: last },
+      });
+      return res.status(409).json({ error: "stale sequence_number", last_sequence: last });
+    }
+  }
+
   missionLog(auth, correlationId, {
     level: "info",
     step: "relay.received",
     selector,
-    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next. (Hello World!)`,
+    message: `Relay received ${selector} ("${payload}") — forwarding to all 3 stations in parallel`,
     properties: { payload, sequence_number },
   });
 
-  // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
-  //   PUT `${GROUND_STATION_URL}/groundstation/<station>/${selector}`
-  //   headers: Authorization: auth, X-Correlation-Id: correlationId
-  //   body:    { payload, sequence_number }
-  // Start simple (one station, then all three), then add retries, parallelism,
-  // Retry-After handling, and sequence-number safeguards.
+  // Fan out to all three stations simultaneously.
+  const results = await Promise.all(
+    STATIONS.map((station) =>
+      writeToStation(station, selector, payload, sequence_number, auth, correlationId)
+    )
+  );
 
-  const station = "nasa";
-  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+  // Update our sequence tracking on any success.
+  const anySuccess = results.some((r) => r.success);
+  if (anySuccess && selector && sequence_number != null) {
+    const current = lastSequence.get(selector) ?? -Infinity;
+    if (sequence_number > current) {
+      lastSequence.set(selector, sequence_number);
+    }
+  }
 
-  // Make the write. We `await` so we know the outcome before responding.
-  await fetch(url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: auth,          // pass the caller's token through unchanged
-      "X-Correlation-Id": correlationId, // keep the whole command in one trace
-    },
-    body: JSON.stringify({ payload, sequence_number }),
+  const allSuccess = results.every((r) => r.success);
+  missionLog(auth, correlationId, {
+    level: allSuccess ? "success" : "warn",
+    step: "relay.complete",
+    selector,
+    message: allSuccess
+      ? `All 3 stations confirmed "${payload}"`
+      : `Partial sync: ${results.filter((r) => r.success).map((r) => r.station).join(", ")} succeeded`,
+    properties: { results: results.map((r) => ({ station: r.station, success: r.success })) },
   });
 
-  // Return an empty 200 response for now. Mission Control only needs a quick
-  // acknowledgement; the real work is the station writes you'll add above.
-  res.status(200).end();
+  res.status(200).json({ ok: true, results });
 });
 
-// Start listening for requests and print where we're pointed, to make local
-// debugging easier. Bind to 0.0.0.0 (all interfaces) so the container is
-// reachable from Coolify's reverse proxy — binding to localhost would make the
-// proxy fail with "Bad Gateway".
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`rover-relay-starter listening on 0.0.0.0:${PORT}`);
-  console.log(`forwarding target (once you implement it): ${GROUND_STATION_URL}`);
+  console.log(`forwarding target: ${GROUND_STATION_URL}`);
 });
