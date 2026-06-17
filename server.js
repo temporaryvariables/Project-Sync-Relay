@@ -116,6 +116,143 @@ function missionLog(token, correlationId, { level = "info", step, selector, stat
   }).catch(() => { }); // ignore network/log errors entirely
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRetryDelay(response, attempt) {
+  const retryAfter = response.headers.get("Retry-After");
+
+  if (retryAfter) {
+    const retryAfterSeconds = Number(retryAfter);
+    if (!Number.isNaN(retryAfterSeconds)) {
+      return retryAfterSeconds * 1000;
+    }
+
+    const retryAfterDate = new Date(retryAfter).getTime();
+    if (!Number.isNaN(retryAfterDate)) {
+      return Math.max(retryAfterDate - Date.now(), 0);
+    }
+  }
+
+  return 250 * 2 ** (attempt - 1);
+}
+
+async function fetchWithTimeout(url, options, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function forwardToStation(station, selector, payload, sequence_number, auth, correlationId) {
+  const maxAttempts = 5;
+  const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+  const body = JSON.stringify({ payload, sequence_number });
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    missionLog(auth, correlationId, {
+      level: "info",
+      step: "relay.forward.attempt",
+      selector,
+      station,
+      message: `Sending ${selector} to ${station}, attempt ${attempt}.`,
+      properties: { attempt, payload, sequence_number },
+    });
+
+    try {
+      const response = await fetchWithTimeout(url, {
+        method: "PUT",
+        headers: {
+          Authorization: auth,
+          "X-Correlation-Id": correlationId,
+          "Content-Type": "application/json",
+        },
+        body,
+      });
+
+      if (response.ok) {
+        missionLog(auth, correlationId, {
+          level: "success",
+          step: "relay.forward.success",
+          selector,
+          station,
+          message: `${station} received ${selector}.`,
+          properties: { status: response.status, attempts: attempt, payload, sequence_number },
+        });
+
+        return { station, ok: true, status: response.status, attempts: attempt };
+      }
+
+      const shouldRetry = response.status === 429 || response.status >= 500;
+
+      if (shouldRetry && attempt < maxAttempts) {
+        const delayMs = getRetryDelay(response, attempt);
+
+        missionLog(auth, correlationId, {
+          level: "warn",
+          step: "relay.forward.retry",
+          selector,
+          station,
+          message: `${station} returned ${response.status}; retrying ${selector}.`,
+          properties: { status: response.status, attempt, next_attempt: attempt + 1, delay_ms: delayMs },
+        });
+
+        await sleep(delayMs);
+        continue;
+      }
+
+      missionLog(auth, correlationId, {
+        level: "error",
+        step: "relay.forward.failed",
+        selector,
+        station,
+        message: `${station} failed for ${selector}.`,
+        properties: { status: response.status, attempts: attempt, payload, sequence_number },
+      });
+
+      return {
+        station,
+        ok: false,
+        status: response.status,
+        attempts: attempt,
+        error: `Station returned HTTP ${response.status}`,
+      };
+    } catch (error) {
+      if (attempt < maxAttempts) {
+        const delayMs = 250 * 2 ** (attempt - 1);
+
+        missionLog(auth, correlationId, {
+          level: "warn",
+          step: "relay.forward.retry",
+          selector,
+          station,
+          message: `${station} had a network problem; retrying ${selector}.`,
+          properties: { error: error.message, attempt, next_attempt: attempt + 1, delay_ms: delayMs },
+        });
+
+        await sleep(delayMs);
+        continue;
+      }
+
+      missionLog(auth, correlationId, {
+        level: "error",
+        step: "relay.forward.failed",
+        selector,
+        station,
+        message: `${station} failed for ${selector}.`,
+        properties: { error: error.message, attempts: attempt, payload, sequence_number },
+      });
+
+      return { station, ok: false, status: 0, attempts: attempt, error: error.message };
+    }
+  }
+}
+
 // A health check so your platform (and Mission Control) can confirm the relay is
 // up. Returns a tiny JSON object with HTTP 200.
 app.get("/health", (_req, res) => res.json({ status: "ok", service: "rover-relay-starter" }));
@@ -139,6 +276,7 @@ app.post("/ReturnMyName/:name", (req, res) => {
 // response. Replace the TODO below with your real forwarding logic.
 // -----------------------------------------------------------------------------
 app.post("/replicate", async (req, res) => {
+  try {
   // Pull the command fields out of the JSON body. (No validation on purpose —
   // add your own checks here later if you want.)
   const { selector, payload, sequence_number } = req.body || {};
@@ -166,56 +304,7 @@ app.post("/replicate", async (req, res) => {
   });
 
   const stationResults = await Promise.all(
-    STATIONS.map(async (station) => {
-      const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-      try {
-        const response = await fetch(url, {
-          method: "PUT",
-          headers: {
-            Authorization: auth,
-            "X-Correlation-Id": correlationId,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ payload, sequence_number }),
-        });
-
-        if (response.ok) {
-          missionLog(auth, correlationId, {
-            level: "success",
-            step: "relay.station.success",
-            selector,
-            station,
-            message: `${station} received ${selector}.`,
-            properties: { status: response.status, payload, sequence_number },
-          });
-
-          return { station, ok: true, status: response.status };
-        }
-
-        missionLog(auth, correlationId, {
-          level: "error",
-          step: "relay.station.failure",
-          selector,
-          station,
-          message: `${station} failed for ${selector}.`,
-          properties: { status: response.status, payload, sequence_number },
-        });
-
-        return { station, ok: false, status: response.status };
-      } catch (error) {
-        missionLog(auth, correlationId, {
-          level: "error",
-          step: "relay.station.failure",
-          selector,
-          station,
-          message: `${station} failed for ${selector}.`,
-          properties: { error: error.message, payload, sequence_number },
-        });
-
-        return { station, ok: false, error: error.message };
-      }
-    })
+    STATIONS.map((station) => forwardToStation(station, selector, payload, sequence_number, auth, correlationId))
   );
 
   // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
@@ -227,6 +316,9 @@ app.post("/replicate", async (req, res) => {
 
   const allStationsSucceeded = stationResults.every((result) => result.ok);
   res.status(allStationsSucceeded ? 200 : 502).json({ stations: stationResults });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Start listening for requests and print where we're pointed, to make local
