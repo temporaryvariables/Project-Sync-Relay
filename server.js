@@ -131,137 +131,80 @@ app.post("/ReturnMyName/:name", (_req, res) => res.json({ status: `Hello my name
 // It just reads the trace context, emits one example log, and returns an empty
 // response. Replace the TODO below with your real forwarding logic.
 // -----------------------------------------------------------------------------
-// Helper function: retry a station write with exponential backoff.
-// Returns { success: boolean, status: number, error?: string }
-async function forwardToStation(station, selector, payload, sequenceNumber, auth, correlationId) {
-  const maxRetries = 3;
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-      const response = await fetch(url, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: auth,
-          "X-Correlation-Id": correlationId,
-        },
-        body: JSON.stringify({
-          payload,
-          sequence_number: sequenceNumber,
-        }),
-      });
-
-      // If successful (2xx), return success
-      if (response.ok) {
-        return { success: true, status: response.status };
-      }
-
-      // If 429 (throttled), respect Retry-After and retry
-      if (response.status === 429) {
-        const retryAfter = parseInt(response.headers.get("Retry-After") || "1", 10);
-        if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-          continue;
-        }
-        lastError = `Throttled (429) after ${maxRetries + 1} attempts`;
-        return { success: false, status: response.status, error: lastError };
-      }
-
-      // If 500 (server error), retry with exponential backoff
-      if (response.status === 500 && attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-
-      // For other errors, log and return
-      const responseText = await response.text().catch(() => "");
-      lastError = `HTTP ${response.status}: ${responseText}`;
-      return { success: false, status: response.status, error: lastError };
-    } catch (err) {
-      lastError = err.message;
-      // On network error, retry with exponential backoff
-      if (attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 1000;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      return { success: false, status: 0, error: lastError };
-    }
-  }
-
-  return { success: false, status: 0, error: lastError };
-}
-
 app.post("/replicate", async (req, res) => {
-  // Pull the command fields out of the JSON body.
+  // Pull the command fields out of the JSON body. (No validation on purpose —
+  // add your own checks here later if you want.)
   const { selector, payload, sequence_number } = req.body || {};
 
-  // Extract headers for authentication and tracing.
+  // Mission Control forwards the caller's PocketBase token in the Authorization
+  // header. You must pass this straight through on every call you make to the
+  // ground stations so they can identify your team.
   const auth = req.headers.authorization || "";
+
+  // The X-Correlation-Id header ties every hop of this one command together so
+  // the dashboard can render a single end-to-end trace. Read it here and forward
+  // it on every station request you make — good distributed-systems hygiene.
   const correlationId = req.headers["x-correlation-id"] || "";
 
-  // Log receipt of the command.
+  // The single example log line. This shows up in Mission Control's trace for
+  // this command as an "info" entry from "Relay", proving your logging works and
+  // giving you a template to copy. Add more missionLog(...) calls as you build
+  // out the forwarding (e.g. one per station result).
   missionLog(auth, correlationId, {
     level: "info",
     step: "relay.received",
     selector,
-    message: `Relay received ${selector} ("${payload}") — forwarding to all ground stations.`,
+    message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next.`,
     properties: { payload, sequence_number },
   });
 
-  // Forward to all three stations in parallel.
-  const results = await Promise.all(
-    STATIONS.map(station =>
-      forwardToStation(station, selector, payload, sequence_number, auth, correlationId)
-        .then(result => ({ station, ...result }))
-    )
-  );
 
-  // Log results for each station.
-  let allSuccess = true;
-  for (const result of results) {
-    const { station, success, status, error } = result;
-    if (success) {
-      missionLog(auth, correlationId, {
-        level: "success",
-        step: "relay.station_write_success",
-        selector,
-        station,
-        message: `Successfully forwarded to ${station.toUpperCase()} (${status})`,
-        properties: { station, sequence_number },
-      });
-    } else {
-      allSuccess = false;
-      missionLog(auth, correlationId, {
-        level: "warn",
-        step: "relay.station_write_failed",
-        selector,
-        station,
-        message: `Failed to forward to ${station.toUpperCase()}: ${error}`,
-        properties: { station, status, error, sequence_number },
-      });
-    }
-  }
+  
 
-  // Log overall result.
+  const stations = ["nasa", "esa", "jaxa"];
+
+for (let i = 0; i < stations.length; i++) {
+  const station = stations[i];
+
+  const url =
+    `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
+
+  await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: auth,
+      "X-Correlation-Id": correlationId,
+    },
+    body: JSON.stringify({
+      payload,
+      sequence_number,
+    }),
+  });
+}
+
+    // The single example log line. This shows up in Mission Control's trace for
+  // this command as an "info" entry from "Relay", proving your logging works and
+  // giving you a template to copy. Add more missionLog(...) calls as you build
+  // out the forwarding (e.g. one per station result).
   missionLog(auth, correlationId, {
-    level: allSuccess ? "success" : "warn",
-    step: "relay.complete",
+    level: "info",
+    step: "relay.received",
     selector,
-    message: allSuccess ? "All stations updated successfully" : "Some stations failed (see details above)",
-    properties: { selector, sequence_number, successful_stations: results.filter(r => r.success).length, total_stations: STATIONS.length },
+    message: `DONE!`,
+    properties: { payload, sequence_number },
   });
 
-  // Return 200 even if some stations failed; Mission Control uses the trace logs to check results.
-  res.status(200).json({
-    selector,
-    sequence_number,
-    stations_updated: results.filter(r => r.success).length,
-    total_stations: STATIONS.length,
-  });
+  // TODO (your mission): forward this command to NASA, ESA and JAXA, e.g.
+  //   PUT `${GROUND_STATION_URL}/groundstation/<station>/${selector}`
+  //   headers: Authorization: auth, X-Correlation-Id: correlationId
+  //   body:    { payload, sequence_number }
+  // Start simple (one station, then all three), then add retries, parallelism,
+  // Retry-After handling, and sequence-number safeguards.
+
+  // Return an empty 200 response for now. Mission Control only needs a quick
+  // acknowledgement; the real work is the station writes you'll add above.
+  res.status(200).end();
 });
 
 // Start listening for requests and print where we're pointed, to make local
