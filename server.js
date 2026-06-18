@@ -124,6 +124,8 @@ app.get("/ReturnHelloWorld", (_req, res) => res.json({ message: "Hello World" })
 
 app.post("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.name }));
 
+
+
 // POST: some sort of operation
 // /ReturnMyName/{my name goes here} -> { message: "Hello my name is {my name goes here}." }
 
@@ -140,6 +142,11 @@ app.post("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.n
 // response. Replace the TODO below with your real forwarding logic.
 // -----------------------------------------------------------------------------
 var current_sequence = 0;
+
+app.post("/reset", async (req, res) => {
+  current_sequence = 0;
+  res.status(200).end();
+});
 
 app.post("/replicate", async (req, res) => {
   // Pull the command fields out of the JSON body. (No validation on purpose —
@@ -169,12 +176,6 @@ app.post("/replicate", async (req, res) => {
   });
 
 
-  
-  
-  if(sequence_number == 1)
-  {
-    current_sequence = 0;
-  }
   // handles old sequence numbers
   // problem with this: the current_sequence never resets
   if(sequence_number <= current_sequence)
