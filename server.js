@@ -139,6 +139,8 @@ app.post("/ReturnMyName/:name", (_req, res) => res.json({ message: _req.params.n
 // It just reads the trace context, emits one example log, and returns an empty
 // response. Replace the TODO below with your real forwarding logic.
 // -----------------------------------------------------------------------------
+var current_sequence = 0;
+
 app.post("/replicate", async (req, res) => {
   // Pull the command fields out of the JSON body. (No validation on purpose —
   // add your own checks here later if you want.)
@@ -160,31 +162,45 @@ app.post("/replicate", async (req, res) => {
   // out the forwarding (e.g. one per station result).
   missionLog(auth, correlationId, { // how do we access the logs
     level: "info",
-    step: "relay.received",
+    step: "old.sequence",
     selector,
     message: `Relay received ${selector} ("${payload}") — implement forwarding to the stations next.`,
     properties: { payload, sequence_number },
   });
 
+  if(sequence_number <= current_sequence)
+  {
+    missionLog(auth, correlationId, { // how do we access the logs
+    level: "warn",
+    step: "relay.received",
+    selector,
+    message: `sequence ${sequence_number} was received when sequence ${current_sequence} is currently stored`,
+    properties: { payload, sequence_number },
+    });
+
+    res.status(400).end();
+    return;
+  }
+  else
+  {
+    current_sequence = sequence_number;
+  }
+
   const stations = ["nasa", "esa", "jaxa"];
   
-  for(const station of stations) {
-    const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-    // Make the write. We `await` so we know the outcome before responding.
-    await fetch(url, {
+  const requests = stations.map(station => 
+    fetch(`${GROUND_STATION_URL}/groundstation/${station}/${selector}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
-        Authorization: auth,          // pass the caller's token through unchanged
-        "X-Correlation-Id": correlationId, // keep the whole command in one trace
+        Authorization: auth,
+        "X-Correlation-Id": correlationId,
       },
-      body: JSON.stringify({
-        "payload": payload,
-        "sequence_number": sequence_number,
-      }),
-    });
-  }
+      body: JSON.stringify({ payload, sequence_number }),
+    })
+  );
+
+  const results = await Promise.all(requests);
     // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
   // giving you a template to copy. Add more missionLog(...) calls as you build
