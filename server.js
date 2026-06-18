@@ -197,8 +197,8 @@ app.post("/replicate", async (req, res) => {
 
   const stations = ["nasa", "esa", "jaxa"];
   
-  const requests = stations.map(station => 
-    await fetch(`${GROUND_STATION_URL}/groundstation/${station}/${selector}`, {
+  const requests = stations.map(station =>
+    fetch(`${GROUND_STATION_URL}/groundstation/${station}/${selector}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -206,8 +206,8 @@ app.post("/replicate", async (req, res) => {
         "X-Correlation-Id": correlationId, // keep the whole command in one trace
       },
       body: JSON.stringify({
-        "payload": payload,
-        "sequence_number": sequence_number,
+        payload: payload,
+        sequence_number: sequence_number,
       }),
     })
   );
