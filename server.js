@@ -169,7 +169,14 @@ app.post("/replicate", async (req, res) => {
   });
 
 
+  
+  
+  if(sequence_number == 1)
+  {
+    current_sequence = 0;
+  }
   // handles old sequence numbers
+  // problem with this: the current_sequence never resets
   if(sequence_number <= current_sequence)
   {
     missionLog(auth, correlationId, { 
@@ -190,11 +197,8 @@ app.post("/replicate", async (req, res) => {
 
   const stations = ["nasa", "esa", "jaxa"];
   
-  for(const station of stations) {
-    const url = `${GROUND_STATION_URL}/groundstation/${station}/${selector}`;
-
-    // Make the write. We `await` so we know the outcome before responding.
-    await fetch(url, {
+  const requests = stations.map(station => 
+    await fetch(`${GROUND_STATION_URL}/groundstation/${station}/${selector}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -205,8 +209,10 @@ app.post("/replicate", async (req, res) => {
         "payload": payload,
         "sequence_number": sequence_number,
       }),
-    });
-  }
+    })
+  );
+
+  const results = await Promise.all(requests);
     // The single example log line. This shows up in Mission Control's trace for
   // this command as an "info" entry from "Relay", proving your logging works and
   // giving you a template to copy. Add more missionLog(...) calls as you build
